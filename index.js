@@ -21,14 +21,7 @@ async function connectDB() {
   const booksCollection = db.collection("books");
   const borrowsCollection = db.collection("borrows");
 
-// Prevent duplicate active borrows by the same user
-await borrowsCollection.createIndex(
-  { bookId: 1, borrowerEmail: 1 },
-  {
-    unique: true,
-    partialFilterExpression: { status: "borrowed" },
-  }
-);
+
 
   // Home route
   app.get("/", (req, res) => {
@@ -105,11 +98,54 @@ await borrowsCollection.createIndex(
     }
   });
 
-  // Borrow Book
+
+// Borrow Book
 app.post("/borrow/:id", async (req, res) => {
   const { id } = req.params;
   const { email } = req.body;
 
+  // Check if user already borrowed this book
+  const alreadyBorrowed = await borrowsCollection.findOne({
+    bookId: id,
+    email: email,
+    status: { $in: ["Borrowed", "borrowed"] },
+  });
+
+  if (alreadyBorrowed) {
+    return res.send({
+      message: "You have already borrowed this book!",
+    });
+  }
+
+
+// Borrow Book
+app.post("/borrow/:id", async (req, res) => {
+  const { id } = req.params;
+  const email = req.body.email?.trim().toLowerCase();
+
+  if (!email) {
+    return res.send({
+      message: "Email is required!",
+    });
+  }
+
+  // Check Previous Active Borrow
+  const alreadyBorrowed = await borrowsCollection.findOne({
+    bookId: id,
+    status: { $regex: /^borrowed$/i },
+    $or: [
+      { email: email },
+      { borrowerEmail: email },
+    ],
+  });
+
+  if (alreadyBorrowed) {
+    return res.send({
+      message: "You have already borrowed this book!",
+    });
+  }
+
+  // Find Book
   const book = await booksCollection.findOne({
     _id: new ObjectId(id),
   });
@@ -120,24 +156,53 @@ app.post("/borrow/:id", async (req, res) => {
     });
   }
 
+  // Reduce Available Copies
   await booksCollection.updateOne(
     { _id: new ObjectId(id) },
     { $inc: { availableCopies: -1 } }
   );
 
-await borrowsCollection.insertOne({
-  bookId: id,
-  title: book.title,
-  author: book.author,
-  category: book.category,
-  image: book.image,
-  email,
-  borrowDate: new Date().toISOString(),
-  returnDate: new Date(
-    Date.now() + 14 * 24 * 60 * 60 * 1000
-  ).toISOString(),
-  status: "Borrowed",
+  // Save Borrow Record
+  await borrowsCollection.insertOne({
+    bookId: id,
+    title: book.title,
+    author: book.author,
+    category: book.category,
+    image: book.image,
+    email: email,
+    borrowDate: new Date().toISOString(),
+    returnDate: new Date(
+      Date.now() + 14 * 24 * 60 * 60 * 1000
+    ).toISOString(),
+    status: "Borrowed",
+  });
+
+  res.send({
+    message: "Book Borrowed Successfully!",
+  });
 });
+
+  // Reduce Available Copies
+  await booksCollection.updateOne(
+    { _id: new ObjectId(id) },
+    { $inc: { availableCopies: -1 } }
+  );
+
+  // Save Borrow Record
+  await borrowsCollection.insertOne({
+    bookId: id,
+    title: book.title,
+    author: book.author,
+    category: book.category,
+    image: book.image,
+    email: email,
+    borrowDate: new Date().toISOString(),
+    returnDate: new Date(
+      Date.now() + 14 * 24 * 60 * 60 * 1000
+    ).toISOString(),
+    status: "Borrowed",
+  });
+
   res.send({
     message: "Book Borrowed Successfully!",
   });
