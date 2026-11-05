@@ -37,6 +37,16 @@ async function connectDB() {
     });
   });
 
+  // All Books
+  app.get("/allbooks", async (req, res) => {
+    const result = await booksCollection
+      .find()
+      .sort({ _id: -1 })
+      .toArray();
+
+    res.send(result);
+  });
+
   // Start server
   app.listen(8000, () => {
     console.log("Server running on port 8000");
