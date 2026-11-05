@@ -2,14 +2,29 @@
 import "dotenv/config";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 
-const AUTH_URL = process.env.BETTER_AUTH_URL;
-
-const JWKS = createRemoteJWKSet(
-  new URL(`${AUTH_URL}/api/auth/jwks`)
-);
+let JWKS;
 
 export const verifyToken = async (req, res, next) => {
   try {
+    const AUTH_URL = (
+      process.env.BETTER_AUTH_URL || process.env.CLIENT_URL
+    )?.replace(/\/+$/, "");
+
+    if (!AUTH_URL) {
+      console.error("BETTER_AUTH_URL and CLIENT_URL are missing!");
+
+      return res.status(500).json({
+        success: false,
+        message: "Authentication configuration is missing",
+      });
+    }
+
+    if (!JWKS) {
+      JWKS = createRemoteJWKSet(
+        new URL(`${AUTH_URL}/api/auth/jwks`)
+      );
+    }
+
     const authHeader = req.headers.authorization;
 
     if (!authHeader?.startsWith("Bearer ")) {
