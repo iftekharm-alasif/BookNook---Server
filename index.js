@@ -25,7 +25,19 @@ async function connectDB() {
     res.send("BookNook Server is Running!");
   });
 
-  // Start server after database connection
+  // Add Book
+  app.post("/books", async (req, res) => {
+    const book = req.body;
+
+    const result = await booksCollection.insertOne(book);
+
+    res.send({
+      message: "Book Added Successfully!",
+      insertedId: result.insertedId,
+    });
+  });
+
+  // Start server
   app.listen(8000, () => {
     console.log("Server running on port 8000");
   });
