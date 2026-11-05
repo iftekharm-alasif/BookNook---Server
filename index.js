@@ -19,6 +19,16 @@ async function connectDB() {
 
   const db = client.db("booknook");
   const booksCollection = db.collection("books");
+  const borrowsCollection = db.collection("borrows");
+
+// Prevent duplicate active borrows by the same user
+await borrowsCollection.createIndex(
+  { bookId: 1, borrowerEmail: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: "borrowed" },
+  }
+);
 
   // Home route
   app.get("/", (req, res) => {
@@ -95,6 +105,107 @@ async function connectDB() {
     }
   });
 
+  // Borrow Book
+app.post("/borrow/:id", async (req, res) => {
+  const { id } = req.params;
+  const { email } = req.body;
+
+  const book = await booksCollection.findOne({
+    _id: new ObjectId(id),
+  });
+
+  if (!book || book.availableCopies <= 0) {
+    return res.send({
+      message: "Book Not Available!",
+    });
+  }
+
+  await booksCollection.updateOne(
+    { _id: new ObjectId(id) },
+    { $inc: { availableCopies: -1 } }
+  );
+
+await borrowsCollection.insertOne({
+  bookId: id,
+  title: book.title,
+  author: book.author,
+  category: book.category,
+  image: book.image,
+  email,
+  borrowDate: new Date().toISOString(),
+  returnDate: new Date(
+    Date.now() + 14 * 24 * 60 * 60 * 1000
+  ).toISOString(),
+  status: "Borrowed",
+});
+  res.send({
+    message: "Book Borrowed Successfully!",
+  });
+});
+
+// My Borrows
+app.get("/my-borrows", async (req, res) => {
+  const { email } = req.query;
+
+  const borrows = await borrowsCollection
+    .find({ email })
+    .toArray();
+
+  const books = [];
+
+  for (const borrow of borrows) {
+    const book = await booksCollection.findOne({
+      _id: new ObjectId(borrow.bookId),
+    });
+
+    books.push({
+      ...borrow,
+      author: borrow.author || book?.author,
+      category: borrow.category || book?.category,
+      image: borrow.image || book?.image,
+      borrowDate: borrow.borrowDate || new Date().toISOString(),
+      returnDate:
+        borrow.returnDate ||
+        new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+      status:
+        borrow.status.toLowerCase() === "borrowed"
+          ? "Borrowed"
+          : "Returned",
+    });
+  }
+
+  res.send(books);
+});
+
+// Return Book
+app.patch("/return/:id", async (req, res) => {
+  const { id } = req.params;
+
+  const borrow = await borrowsCollection.findOne({
+    _id: new ObjectId(id),
+    status: { $in: ["Borrowed", "borrowed"] },
+  });
+
+  if (!borrow) {
+    return res.send({
+      message: "Borrow Record Not Found!",
+    });
+  }
+
+  await borrowsCollection.updateOne(
+    { _id: new ObjectId(id) },
+    { $set: { status: "Returned" } }
+  );
+
+  await booksCollection.updateOne(
+    { _id: new ObjectId(borrow.bookId) },
+    { $inc: { availableCopies: 1 } }
+  );
+
+  res.send({
+    message: "Book Returned Successfully!",
+  });
+});
   // Start server
   app.listen(8000, () => {
     console.log("Server running on port 8000");
