@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { MongoClient } from "mongodb";
+import { MongoClient, ObjectId } from "mongodb";
 
 dotenv.config();
 
@@ -56,6 +56,43 @@ async function connectDB() {
       .toArray();
 
     res.send(result);
+  });
+
+  // Get Single Book by ID
+  app.get("/books/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      console.log("Requested Book ID:", id);
+
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({
+          message: "Invalid Book ID",
+        });
+      }
+
+      const book = await booksCollection.findOne({
+        $or: [
+          { _id: new ObjectId(id) },
+          { _id: id },
+        ],
+      });
+
+      if (!book) {
+        return res.status(404).send({
+          message: "Book not found",
+          requestedId: id,
+        });
+      }
+
+      res.status(200).send(book);
+    } catch (error) {
+      console.error("Single Book API Error:", error);
+
+      res.status(500).send({
+        message: "Internal Server Error",
+      });
+    }
   });
 
   // Start server
