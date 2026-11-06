@@ -6,33 +6,61 @@ import { MongoClient, ObjectId } from "mongodb";
 import { verifyToken } from "./middleware/verifyToken.js";
 
 const app = express();
-const PORT = 8000;
-
-const client = new MongoClient(process.env.MONGODB_URL);
+const PORT = process.env.PORT || 8000;
 
 app.use(cors());
 app.use(express.json());
 
+let client;
+let dbPromise;
+
 async function connectDB() {
-  await client.connect();
-  console.log("MongoDB Connected!");
+  const uri = process.env.MONGODB_URL;
 
-  const db = client.db("booknook");
-  const books = db.collection("books");
-  const borrows = db.collection("borrows");
+  if (!uri) {
+    throw new Error("MONGODB_URL environment variable is missing");
+  }
 
-  // Home
-  app.get("/", (req, res) => {
-    res.send("BookNook Server is Running!");
+  if (!dbPromise) {
+    client = new MongoClient(uri, {
+      serverSelectionTimeoutMS: 10000,
+    });
+
+    dbPromise = client
+      .connect()
+      .then(() => {
+        console.log("MongoDB Connected!");
+        return client.db("booknook");
+      })
+      .catch((error) => {
+        client = undefined;
+        dbPromise = undefined;
+        throw error;
+      });
+  }
+
+  return dbPromise;
+}
+
+// Home
+app.get("/", (req, res) => {
+  res.send("BookNook Server is Running!");
+});
+
+// JWT Test
+app.get("/api/protected", verifyToken, (req, res) => {
+  res.send({
+    success: true,
+    user: req.user,
   });
+});
 
-  // JWT Test
-  app.get("/api/protected", verifyToken, (req, res) => {
-    res.send({ success: true, user: req.user });
-  });
+// Add Book
+app.post("/books", verifyToken, async (req, res, next) => {
+  try {
+    const db = await connectDB();
+    const books = db.collection("books");
 
-  // Add Book
-  app.post("/books", verifyToken, async (req, res) => {
     const book = {
       ...req.body,
       totalCopies: Number(req.body.totalCopies),
@@ -42,46 +70,103 @@ async function connectDB() {
     };
 
     const result = await books.insertOne(book);
-    res.send(result);
-  });
 
-  // All Books
-  app.get("/allbooks", async (req, res) => {
-    const result = await books.find().sort({ _id: -1 }).toArray();
     res.send(result);
-  });
+  } catch (error) {
+    next(error);
+  }
+});
 
-  // Recent Books
-  app.get("/recentbooks", async (req, res) => {
-    const result = await books.find().sort({ _id: -1 }).limit(10).toArray();
+// All Books
+app.get("/allbooks", async (req, res, next) => {
+  try {
+    const db = await connectDB();
+    const result = await db
+      .collection("books")
+      .find()
+      .sort({ _id: -1 })
+      .toArray();
+
     res.send(result);
-  });
+  } catch (error) {
+    next(error);
+  }
+});
 
-  // Single Book
-  app.get("/books/:id", async (req, res) => {
-    const result = await books.findOne({ _id: new ObjectId(req.params.id) });
+// Recent Books
+app.get("/recentbooks", async (req, res, next) => {
+  try {
+    const db = await connectDB();
+    const result = await db
+      .collection("books")
+      .find()
+      .sort({ _id: -1 })
+      .limit(10)
+      .toArray();
+
     res.send(result);
-  });
+  } catch (error) {
+    next(error);
+  }
+});
 
-  // Delete Book
-  app.delete("/books/:id", verifyToken, async (req, res) => {
-    const result = await books.deleteOne({
+// Single Book
+app.get("/books/:id", async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) {
+      return res.status(400).send({ message: "Invalid book ID!" });
+    }
+
+    const db = await connectDB();
+    const result = await db.collection("books").findOne({
+      _id: new ObjectId(req.params.id),
+    });
+
+    if (!result) {
+      return res.status(404).send({ message: "Book not found!" });
+    }
+
+    res.send(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Delete Book
+app.delete("/books/:id", verifyToken, async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) {
+      return res.status(400).send({ message: "Invalid book ID!" });
+    }
+
+    const db = await connectDB();
+    const result = await db.collection("books").deleteOne({
       _id: new ObjectId(req.params.id),
       email: req.user.email.toLowerCase(),
     });
 
     res.send(result);
-  });
+  } catch (error) {
+    next(error);
+  }
+});
 
-  // Update Book
-  app.put("/books/:id", verifyToken, async (req, res) => {
+// Update Book
+app.put("/books/:id", verifyToken, async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) {
+      return res.status(400).send({ message: "Invalid book ID!" });
+    }
+
+    const db = await connectDB();
+
     const data = {
       ...req.body,
       totalCopies: Number(req.body.totalCopies),
       availableCopies: Number(req.body.availableCopies),
     };
 
-    const result = await books.updateOne(
+    const result = await db.collection("books").updateOne(
       {
         _id: new ObjectId(req.params.id),
         email: req.user.email.toLowerCase(),
@@ -90,18 +175,26 @@ async function connectDB() {
     );
 
     res.send(result);
-  });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Borrow Book
-app.post("/borrow/:id", verifyToken, async (req, res) => {
+app.post("/borrow/:id", verifyToken, async (req, res, next) => {
   try {
     const id = req.params.id;
-    const email = req.user.email.toLowerCase();
 
     if (!ObjectId.isValid(id)) {
       return res.status(400).send({
         message: "Invalid book ID!",
       });
     }
+
+    const db = await connectDB();
+    const books = db.collection("books");
+    const borrows = db.collection("borrows");
+    const email = req.user.email.toLowerCase();
 
     const alreadyBorrowed = await borrows.findOne({
       bookId: id,
@@ -174,26 +267,39 @@ app.post("/borrow/:id", verifyToken, async (req, res) => {
       message: "Book Borrowed Successfully!",
     });
   } catch (error) {
-    console.error("Borrow Error:", error);
-
-    res.status(500).send({
-      message: "Failed to borrow book",
-    });
+    next(error);
   }
 });
 
-  // My Borrows
-  app.get("/my-borrows", verifyToken, async (req, res) => {
-    const result = await borrows.find({
+// My Borrows
+app.get("/my-borrows", verifyToken, async (req, res, next) => {
+  try {
+    const db = await connectDB();
+
+    const result = await db.collection("borrows").find({
       email: req.user.email.toLowerCase(),
     }).toArray();
 
     res.send(result);
-  });
+  } catch (error) {
+    next(error);
+  }
+});
 
-  // Return Book
-  app.patch("/return/:id", verifyToken, async (req, res) => {
+// Return Book
+app.patch("/return/:id", verifyToken, async (req, res, next) => {
+  try {
     const id = req.params.id;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({
+        message: "Invalid borrow ID!",
+      });
+    }
+
+    const db = await connectDB();
+    const borrows = db.collection("borrows");
+    const books = db.collection("books");
 
     const borrow = await borrows.findOne({
       _id: new ObjectId(id),
@@ -202,12 +308,19 @@ app.post("/borrow/:id", verifyToken, async (req, res) => {
     });
 
     if (!borrow) {
-      return res.status(404).send({ message: "Borrow not found!" });
+      return res.status(404).send({
+        message: "Borrow not found!",
+      });
     }
 
     await borrows.updateOne(
-      { _id: new ObjectId(id) },
-      { $set: { status: "Returned" } }
+      {
+        _id: new ObjectId(id),
+        status: "Borrowed",
+      },
+      {
+        $set: { status: "Returned" },
+      }
     );
 
     await books.updateOne(
@@ -215,14 +328,29 @@ app.post("/borrow/:id", verifyToken, async (req, res) => {
       { $inc: { availableCopies: 1 } }
     );
 
-    res.send({ message: "Book Returned Successfully!" });
-  });
+    res.send({
+      message: "Book Returned Successfully!",
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
+// Error Handler
+app.use((error, req, res, next) => {
+  console.error("API Error:", error);
+
+  res.status(500).send({
+    success: false,
+    message: "Internal Server Error",
+  });
+});
+
+// Local Development Only
+if (!process.env.VERCEL) {
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
   });
 }
-
-connectDB().catch(console.error);
 
 export default app;
